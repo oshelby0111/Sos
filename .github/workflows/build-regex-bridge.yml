@@ -1,0 +1,50 @@
+name: Build liblovely_regex.so (Android ARM64)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths: [ "native/regex_bridge/**", ".github/workflows/build-regex-bridge.yml" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      NDK_VERSION: "27.2.12479018"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install Android NDK
+        run: |
+          yes | sudo ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
+          ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager "ndk;${NDK_VERSION}"
+          echo "NDK_BIN=${ANDROID_HOME}/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_ENV"
+
+      - name: Build
+        working-directory: native/regex_bridge
+        env:
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ env.NDK_BIN }}/aarch64-linux-android30-clang
+          RUSTFLAGS: "-C link-arg=-Wl,-z,max-page-size=16384"
+        run: cargo build --release --target aarch64-linux-android
+
+      - name: Verify
+        working-directory: native/regex_bridge
+        run: |
+          SO=target/aarch64-linux-android/release/liblovely_regex.so
+          file "$SO"
+          readelf -h "$SO" | grep -E "Machine|Class"
+          ${NDK_BIN}/llvm-nm -D --defined-only "$SO" | tee /tmp/syms.txt
+          for s in compile capture_count capture_name find free; do
+            grep -q "lovely_regex_$s" /tmp/syms.txt || { echo "FALTA lovely_regex_$s"; exit 1; }
+          done
+          ls -l "$SO"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: liblovely_regex-arm64-v8a
+          path: native/regex_bridge/target/aarch64-linux-android/release/liblovely_regex.so
+          if-no-files-found: error
